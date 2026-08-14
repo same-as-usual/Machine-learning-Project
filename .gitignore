@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+
+# Data & models (versioned via DVC, not git)
+data/raw/
+data/interim/
+data/processed/
+models/artifacts/
+*.parquet
+*.joblib
+*.onnx
+
+# DVC
+/data/.dvc-cache
+
+# Tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Experiment tracking
+wandb/
+mlruns/
+
+# Env & editors
+.env
+.idea/
+.vscode/
+*.log
+nohup.out
+
+# Notebooks
+.ipynb_checkpoints/

@@ -1,0 +1,47 @@
+# Reproducible pipeline spine. Run with `dvc repro` (requires `pip install dvc`)
+# or stage-by-stage via `make data && make train`.
+stages:
+  ingest:
+    cmd: python -m manipulens.data.ingest
+    deps:
+      - src/manipulens/data/ingest.py
+    params:
+      - data
+    outs:
+      - data/raw/headlines.parquet
+  dedup:
+    cmd: python -m manipulens.data.dedup
+    deps:
+      - src/manipulens/data/dedup.py
+      - data/raw/headlines.parquet
+    params:
+      - dedup
+    outs:
+      - data/interim/deduped.parquet
+  split:
+    cmd: python -m manipulens.data.splits
+    deps:
+      - src/manipulens/data/splits.py
+      - data/interim/deduped.parquet
+    params:
+      - splits
+    outs:
+      - data/processed/train.parquet
+      - data/processed/val.parquet
+      - data/processed/test.parquet
+  train:
+    cmd: python -m manipulens.models.baselines
+    deps:
+      - src/manipulens/models/baselines.py
+      - src/manipulens/models/calibrate.py
+      - src/manipulens/labeling/labeling_functions.py
+      - data/processed/train.parquet
+      - data/processed/val.parquet
+      - data/processed/test.parquet
+    params:
+      - train
+    outs:
+      - models/artifacts/baseline.joblib
+    metrics:
+      - reports/eval_report.json:
+          cache: false

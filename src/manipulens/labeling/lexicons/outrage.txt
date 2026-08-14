@@ -1,0 +1,32 @@
+# Outrage-bait verbs and framing (D2). One entry per line; '#' comments.
+slams
+slammed
+destroys
+destroyed
+blasts
+blasted
+eviscerates
+eviscerated
+humiliates
+humiliated
+shreds
+shredded
+torches
+torched
+rips
+ripped
+lashes out
+takedown
+epic fail
+disgrace
+disgraceful
+outrage
+outrageous
+furious
+fury
+enraged
+backlash
+meltdown
+unhinged
+pathetic
+whiny
