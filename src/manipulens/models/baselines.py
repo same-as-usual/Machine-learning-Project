@@ -29,6 +29,7 @@ from manipulens.config import REPO_ROOT, artifacts_dir, data_dir, load_params
 from manipulens.eval.metrics import classification_report_dict
 from manipulens.labeling.labeling_functions import FEATURE_NAMES, feature_vector
 from manipulens.models.calibrate import Calibrator
+from manipulens.models.neutralize import mask_entities
 
 
 def lf_features(headlines: pd.Series) -> np.ndarray:
@@ -77,16 +78,20 @@ class BaselinePipeline:
 
     # --- training ---
     def fit(self, train: pd.DataFrame, val: pd.DataFrame) -> dict[str, dict[str, float]]:
-        x_train_text = self._text_matrix(train["headline"], fit=True)
-        x_val_text = self._text_matrix(val["headline"])
+        # Neutrality by construction: political entities are masked before ALL
+        # model inputs (text AND structural features) so they carry zero signal.
+        h_train = train["headline"].map(mask_entities)
+        h_val = val["headline"].map(mask_entities)
+        x_train_text = self._text_matrix(h_train, fit=True)
+        x_val_text = self._text_matrix(h_val)
         y_train, y_val = train["label_clickbait"].to_numpy(), val["label_clickbait"].to_numpy()
 
         self.logreg.fit(x_train_text, y_train)
         p_train_lr = self.logreg.predict_proba(x_train_text)[:, 1]
         p_val_lr = self.logreg.predict_proba(x_val_text)[:, 1]
 
-        f_train = np.column_stack([lf_features(train["headline"]), p_train_lr])
-        f_val = np.column_stack([lf_features(val["headline"]), p_val_lr])
+        f_train = np.column_stack([lf_features(h_train), p_train_lr])
+        f_val = np.column_stack([lf_features(h_val), p_val_lr])
         self.gbm.fit(f_train, y_train)
         p_val_gbm = self.gbm.predict_proba(f_val)[:, 1]
 
@@ -103,7 +108,7 @@ class BaselinePipeline:
     def predict_proba(
         self, headlines: pd.Series | list[str], calibrated: bool = True
     ) -> np.ndarray:
-        headlines = pd.Series(headlines)
+        headlines = pd.Series(headlines).map(mask_entities)
         x_text = self._text_matrix(headlines)
         p_lr = self.logreg.predict_proba(x_text)[:, 1]
         feats = np.column_stack([lf_features(headlines), p_lr])
@@ -155,4 +160,9 @@ def main(argv: list[str] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    # Run main() from the canonically-imported module so that the pickled
+    # artifact references manipulens.models.baselines.BaselinePipeline,
+    # not __main__.BaselinePipeline (which would break unpickling elsewhere).
+    from manipulens.models import baselines as _canonical
+
+    _canonical.main(sys.argv[1:])
