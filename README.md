@@ -38,6 +38,20 @@ curl -s -X POST localhost:8000/score \
   -d '{"headline": "You Won'\''t Believe What This Senator Said Next"}' | python3 -m json.tool
 ```
 
+## CI
+
+The GitHub Actions workflow lives at `ci/github-workflows/ci.yml` (the deploy
+token used here lacks the `workflow` scope, so it cannot push files under
+`.github/workflows/`). To activate CI:
+
+```bash
+mkdir -p .github/workflows && cp ci/github-workflows/ci.yml .github/workflows/ci.yml
+git add .github/workflows && git commit -m "Enable CI" && git push  # needs workflow scope
+```
+
+It runs lint + unit/data-contract tests, then trains a sample model and runs the
+behavioral promotion gate.
+
 ## Repo map
 
 ```
