@@ -16,7 +16,9 @@ from collections.abc import Sequence
 Value = float | int | None
 
 
-def _coincidence_matrix(units: list[list[float]]) -> tuple[dict[tuple[float, float], float], dict[float, float], float]:
+def _coincidence_matrix(
+    units: list[list[float]],
+) -> tuple[dict[tuple[float, float], float], dict[float, float], float]:
     coincidences: dict[tuple[float, float], float] = {}
     totals: dict[float, float] = {}
     n_total = 0.0
@@ -54,7 +56,10 @@ def krippendorff_alpha(
     with equidistant ordinal categories the two coincide).
     """
     delta = _delta_nominal if metric == "nominal" else _delta_interval
-    units = [[float(v) for v in unit if v is not None and not (isinstance(v, float) and math.isnan(v))] for unit in annotations]
+    units = [
+        [float(v) for v in unit if v is not None and not (isinstance(v, float) and math.isnan(v))]
+        for unit in annotations
+    ]
     units = [u for u in units if len(u) >= 2]
     if not units:
         raise ValueError("need at least one unit with >= 2 annotations")
@@ -66,7 +71,10 @@ def krippendorff_alpha(
 
     d_observed = sum(coincidences.get((a, b), 0.0) * delta(a, b) for a in values for b in values)
     d_expected = sum(
-        totals[a] * totals[b] * delta(a, b) for a in values for b in values if a != b or delta(a, b) != 0
+        totals[a] * totals[b] * delta(a, b)
+        for a in values
+        for b in values
+        if a != b or delta(a, b) != 0
     ) / (n - 1)
     if d_expected == 0:
         return 1.0

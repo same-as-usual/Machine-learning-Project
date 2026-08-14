@@ -28,7 +28,9 @@ def expected_calibration_error(y_true: np.ndarray, y_prob: np.ndarray, n_bins: i
     return float(ece)
 
 
-def classification_report_dict(y_true: np.ndarray, y_prob: np.ndarray, threshold: float = 0.5) -> dict[str, float]:
+def classification_report_dict(
+    y_true: np.ndarray, y_prob: np.ndarray, threshold: float = 0.5
+) -> dict[str, float]:
     y_pred = (np.asarray(y_prob) >= threshold).astype(int)
     return {
         "roc_auc": float(roc_auc_score(y_true, y_prob)),

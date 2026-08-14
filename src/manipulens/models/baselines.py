@@ -94,11 +94,15 @@ class BaselinePipeline:
         return {
             "val_logreg": classification_report_dict(y_val, p_val_lr),
             "val_lgbm_raw": classification_report_dict(y_val, p_val_gbm),
-            "val_lgbm_calibrated": classification_report_dict(y_val, self.calibrator.transform(p_val_gbm)),
+            "val_lgbm_calibrated": classification_report_dict(
+                y_val, self.calibrator.transform(p_val_gbm)
+            ),
         }
 
     # --- inference ---
-    def predict_proba(self, headlines: pd.Series | list[str], calibrated: bool = True) -> np.ndarray:
+    def predict_proba(
+        self, headlines: pd.Series | list[str], calibrated: bool = True
+    ) -> np.ndarray:
         headlines = pd.Series(headlines)
         x_text = self._text_matrix(headlines)
         p_lr = self.logreg.predict_proba(x_text)[:, 1]
@@ -127,7 +131,9 @@ def main(argv: list[str] | None = None) -> None:
     report: dict = {"n_train": len(train), "n_val": len(val), "n_test": len(test)}
 
     # Rung 1: rules only
-    report["test_rules_only"] = classification_report_dict(y_test, rule_baseline_proba(test["headline"]))
+    report["test_rules_only"] = classification_report_dict(
+        y_test, rule_baseline_proba(test["headline"])
+    )
 
     # Rungs 2+3
     pipe = BaselinePipeline(params)

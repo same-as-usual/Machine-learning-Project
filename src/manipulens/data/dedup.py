@@ -84,7 +84,9 @@ def main(argv: list[str] | None = None) -> None:
     df = validate_deduped(df)
     out = data_dir("interim") / "deduped.parquet"
     df.to_parquet(out, index=False)
-    print(f"{len(df)} rows -> {n_groups} near-dup groups ({n_dupes} rows have a near-dupe) -> {out}")
+    print(
+        f"{len(df)} rows -> {n_groups} near-dup groups ({n_dupes} rows have a near-dupe) -> {out}"
+    )
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ def grouped_stratified_split(
     group_label = df.groupby("dup_group")["label_clickbait"].agg(lambda s: int(s.mean() >= 0.5))
     assignment: dict[int, str] = {}
     for label in group_label.unique():
-        groups = group_label[group_label == label].index.to_numpy()
+        groups = group_label[group_label == label].index.to_numpy().copy()
         rng.shuffle(groups)
         n = len(groups)
         n_test = max(1, round(n * test_size)) if n > 2 else 0
@@ -49,7 +49,9 @@ def check_no_leakage(df: pd.DataFrame) -> None:
     splits_per_group = df.groupby("dup_group")["split"].nunique()
     leaky = splits_per_group[splits_per_group > 1]
     if not leaky.empty:
-        raise AssertionError(f"near-dup leakage across splits in groups: {leaky.index.tolist()[:10]}")
+        raise AssertionError(
+            f"near-dup leakage across splits in groups: {leaky.index.tolist()[:10]}"
+        )
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -83,6 +83,7 @@ def test_shock_framing_raises_score(model, base):
 
 # --- Sanity ordering ---
 
+
 def test_archetypes_ordered(model):
     wire = "Court upholds ruling in state redistricting case"
     bait = "You Won't Believe What This Judge Did Next — #3 Will SHOCK You!!"

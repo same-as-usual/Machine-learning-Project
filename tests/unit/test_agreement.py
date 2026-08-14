@@ -9,11 +9,11 @@ def test_perfect_agreement():
 
 
 def test_known_value_nominal():
-    # Krippendorff (2011) worked example: alpha = 0.691 (nominal, 2 observers)
-    a = [None, None, None, None, None, 3, 4, 1, 2, 1, 1, 3, 3, None, 3]
-    b = [1, None, 2, 1, 3, 3, 4, 3, None, None, None, None, None, None, None]
+    # Krippendorff (2011) worked binary example, 2 observers, 10 units: alpha ≈ 0.095
+    a = [0, 1, 0, 0, 0, 0, 0, 0, 1, 0]
+    b = [1, 1, 1, 0, 0, 1, 0, 0, 0, 0]
     alpha = krippendorff_alpha(list(zip(a, b, strict=True)), metric="nominal")
-    assert alpha == pytest.approx(0.095, abs=0.01)
+    assert alpha == pytest.approx(0.095, abs=0.005)
 
 
 def test_disagreement_lower_than_agreement():

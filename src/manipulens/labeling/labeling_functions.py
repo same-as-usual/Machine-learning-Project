@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from functools import lru_cache
+from functools import cache
 from importlib import resources
 
 
@@ -53,16 +53,18 @@ _LEXICON_FILES = {
 }
 
 
-@lru_cache(maxsize=None)
+@cache
 def load_lexicon(dimension: str) -> tuple[str, ...]:
     fname = _LEXICON_FILES[dimension]
     text = (resources.files("manipulens.labeling") / "lexicons" / fname).read_text()
-    terms = [ln.strip().lower() for ln in text.splitlines() if ln.strip() and not ln.startswith("#")]
+    terms = [
+        ln.strip().lower() for ln in text.splitlines() if ln.strip() and not ln.startswith("#")
+    ]
     # longest-first so multi-word phrases win over substrings
     return tuple(sorted(terms, key=len, reverse=True))
 
 
-@lru_cache(maxsize=None)
+@cache
 def _lexicon_pattern(dimension: str) -> re.Pattern[str]:
     terms = load_lexicon(dimension)
     alternation = "|".join(re.escape(t) for t in terms)
@@ -83,10 +85,34 @@ def _lexicon_lf(headline: str, dimension: str) -> DimensionResult:
 
 _ALLCAPS_RE = re.compile(r"\b[A-Z]{3,}\b")
 _MULTI_PUNCT_RE = re.compile(r"[!?]{2,}|!")
-_LISTICLE_RE = re.compile(r"^\s*\d{1,3}\s+\w|\b\d{1,3}\s+(?:things|ways|reasons|facts|tricks|signs|photos|times)\b", re.IGNORECASE)
+_LISTICLE_RE = re.compile(
+    r"^\s*\d{1,3}\s+\w|\b\d{1,3}\s+(?:things|ways|reasons|facts|tricks|signs|photos|times)\b",
+    re.IGNORECASE,
+)
 _NUMBER_TEASE_RE = re.compile(r"#\d+\b|\bnumber\s+\d+\b", re.IGNORECASE)
 
-_STOP_ALLCAPS = {"CEO", "USA", "NASA", "FBI", "CIA", "GOP", "NFL", "NBA", "MLB", "CDC", "WHO", "EU", "UK", "US", "TV", "AI", "GDP", "IPO", "DNA", "PSA"}
+_STOP_ALLCAPS = {
+    "CEO",
+    "USA",
+    "NASA",
+    "FBI",
+    "CIA",
+    "GOP",
+    "NFL",
+    "NBA",
+    "MLB",
+    "CDC",
+    "WHO",
+    "EU",
+    "UK",
+    "US",
+    "TV",
+    "AI",
+    "GDP",
+    "IPO",
+    "DNA",
+    "PSA",
+}
 
 
 def sensational_formatting_lf(headline: str) -> DimensionResult:
