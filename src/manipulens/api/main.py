@@ -16,6 +16,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from manipulens import __version__
@@ -88,8 +89,16 @@ def feedback(req: FeedbackRequest) -> dict:
     return {"status": "queued"}
 
 
+_STATIC_INDEX = Path(__file__).parent / "static" / "index.html"
+
+
 @app.get("/")
-def index() -> dict:
+def index() -> FileResponse:
+    return FileResponse(_STATIC_INDEX)
+
+
+@app.get("/info")
+def info() -> dict:
     return {
         "service": "ManipuLens",
         "docs": "/docs",

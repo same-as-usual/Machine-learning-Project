@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ManipuLens — headline manipulation analyzer</title>
+<style>
+  :root {
+    --surface-1: #fcfcfb;
+    --page: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --seq: #2a78d6;          /* sequential blue, light 450 */
+    --seq-track: #cde2fb;    /* same-ramp step 100 */
+    --span-wash: rgba(42, 120, 214, 0.16);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface-1: #1a1a19;
+      --page: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --seq: #3987e5;        /* dark-surface step 400 */
+      --seq-track: #0d366b;  /* same-ramp step 700, recedes on dark */
+      --span-wash: rgba(57, 135, 229, 0.28);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--text-primary);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; justify-content: center; padding: 40px 16px;
+  }
+  main { width: 100%; max-width: 660px; }
+  h1 { font-size: 22px; margin: 0 0 2px; }
+  .tagline { color: var(--text-secondary); margin: 0 0 24px; font-size: 14px; }
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px; margin-bottom: 16px;
+  }
+  form { display: flex; gap: 8px; }
+  input[type=text] {
+    flex: 1; padding: 10px 12px; border: 1px solid var(--baseline);
+    border-radius: 8px; background: var(--surface-1); color: var(--text-primary);
+    font: inherit;
+  }
+  button {
+    padding: 10px 18px; border: 0; border-radius: 8px; cursor: pointer;
+    background: var(--seq); color: #fff; font: inherit; font-weight: 600;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  .examples { margin-top: 10px; font-size: 13px; color: var(--text-muted); }
+  .examples a { color: var(--text-secondary); cursor: pointer; text-decoration: underline; }
+  #result { display: none; }
+  .headline-echo { font-size: 17px; font-weight: 600; margin: 0 0 16px; line-height: 1.45; }
+  .headline-echo mark {
+    background: var(--span-wash); color: inherit; border-radius: 3px;
+    padding: 0 2px; border-bottom: 2px solid var(--seq);
+  }
+  .hero-row { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; }
+  .hero { font-size: 48px; font-weight: 700; line-height: 1; }
+  .band { color: var(--text-secondary); font-size: 14px; }
+  .meter {
+    height: 10px; background: var(--seq-track); border-radius: 4px;
+    overflow: hidden; margin: 8px 0 20px;
+  }
+  .meter > div { height: 100%; background: var(--seq); border-radius: 0 4px 4px 0; width: 0; transition: width .35s ease; }
+  .dims { border-top: 1px solid var(--grid); padding-top: 14px; }
+  .dims h2 { font-size: 13px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; margin: 0 0 10px; }
+  .dim-row {
+    display: grid; grid-template-columns: 170px 1fr 44px; align-items: center;
+    gap: 10px; padding: 5px 4px; border-radius: 6px;
+  }
+  .dim-row:hover { background: var(--span-wash); }
+  .dim-name { font-size: 13.5px; color: var(--text-secondary); }
+  .dim-bar { height: 10px; background: none; position: relative; }
+  .dim-bar::before {
+    content: ""; position: absolute; inset: 0 auto 0 0; width: 1px; background: var(--baseline);
+  }
+  .dim-bar > div {
+    height: 100%; background: var(--seq); border-radius: 0 4px 4px 0;
+    width: 0; transition: width .35s ease; min-width: 0;
+  }
+  .dim-val { font-size: 13px; color: var(--text-primary); font-variant-numeric: tabular-nums; text-align: right; }
+  .disclaimer { font-size: 12.5px; color: var(--text-muted); margin-top: 16px; }
+  footer { font-size: 12.5px; color: var(--text-muted); text-align: center; margin-top: 8px; }
+  footer a { color: var(--text-secondary); }
+</style>
+</head>
+<body>
+<main>
+  <h1>ManipuLens</h1>
+  <p class="tagline">Detects manipulation <em>techniques</em> in news headlines — not truth.</p>
+
+  <div class="card">
+    <form id="form">
+      <input type="text" id="headline" maxlength="500" required
+             placeholder="Paste a headline…" autocomplete="off">
+      <button id="go" type="submit">Score</button>
+    </form>
+    <p class="examples">Try:
+      <a data-h="You Won't Believe What This Senator Said Next">clickbait</a> ·
+      <a data-h="The silent killer hiding in your kitchen — doctors sound alarm">fear</a> ·
+      <a data-h="Senate passes infrastructure bill in 69-30 vote">wire copy</a>
+    </p>
+  </div>
+
+  <div class="card" id="result" aria-live="polite">
+    <p class="headline-echo" id="echo"></p>
+    <div class="hero-row">
+      <span class="hero" id="score">–</span>
+      <span class="band" id="band"></span>
+    </div>
+    <div class="meter" aria-hidden="true"><div id="meterfill"></div></div>
+    <div class="dims">
+      <h2>Technique breakdown</h2>
+      <div id="dimrows"></div>
+    </div>
+    <p class="disclaimer" id="disclaimer"></p>
+  </div>
+
+  <footer>Calibrated LightGBM baseline · political entities masked by construction ·
+    <a href="/docs">API docs</a></footer>
+</main>
+
+<script>
+const DIM_LABELS = {
+  curiosity_gap: "Curiosity gap",
+  outrage: "Outrage bait",
+  fear: "Fear-mongering",
+  false_certainty: "False certainty",
+  emotional_framing: "Emotional framing",
+  sensational_formatting: "Sensational formatting",
+};
+
+const form = document.getElementById("form");
+const input = document.getElementById("headline");
+const go = document.getElementById("go");
+
+document.querySelectorAll(".examples a").forEach(a =>
+  a.addEventListener("click", () => { input.value = a.dataset.h; form.requestSubmit(); }));
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  go.disabled = true;
+  try {
+    const resp = await fetch("/score", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ headline: input.value }),
+    });
+    if (!resp.ok) throw new Error("scoring failed");
+    render(await resp.json());
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    go.disabled = false;
+  }
+});
+
+function esc(s) {
+  return s.replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+}
+
+function highlight(headline, techniques) {
+  // merge spans from all dimensions; mark non-overlapping, left-to-right
+  const spans = Object.entries(techniques)
+    .flatMap(([dim, t]) => t.spans.map(s => ({ ...s, dim })))
+    .sort((a, b) => a.start - b.start || b.end - a.end);
+  let html = "", pos = 0;
+  for (const s of spans) {
+    if (s.start < pos) continue;
+    html += esc(headline.slice(pos, s.start));
+    html += `<mark title="${esc(DIM_LABELS[s.dim] || s.dim)}">${esc(headline.slice(s.start, s.end))}</mark>`;
+    pos = s.end;
+  }
+  html += esc(headline.slice(pos));
+  return html;
+}
+
+function render(r) {
+  document.getElementById("result").style.display = "block";
+  document.getElementById("echo").innerHTML = highlight(r.headline, r.techniques);
+  document.getElementById("score").textContent = Math.round(r.manipulation_score * 100) + "%";
+  document.getElementById("band").textContent = r.intensity + " manipulation intensity";
+  document.getElementById("meterfill").style.width = (r.manipulation_score * 100) + "%";
+  document.getElementById("disclaimer").textContent = r.disclaimer;
+
+  const rows = document.getElementById("dimrows");
+  rows.innerHTML = "";
+  for (const [dim, label] of Object.entries(DIM_LABELS)) {
+    const t = r.techniques[dim];
+    if (!t) continue;
+    const row = document.createElement("div");
+    row.className = "dim-row";
+    row.innerHTML =
+      `<span class="dim-name">${label}</span>` +
+      `<span class="dim-bar"><div style="width:${t.score * 100}%"></div></span>` +
+      `<span class="dim-val">${t.score.toFixed(2)}</span>`;
+    rows.appendChild(row);
+  }
+}
+</script>
+</body>
+</html>

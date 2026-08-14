@@ -46,7 +46,7 @@ tracking = ["wandb", "dvc[s3]>=3.0"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-manipulens = ["labeling/lexicons/*.txt", "labeling/*.md"]
+manipulens = ["labeling/lexicons/*.txt", "labeling/*.md", "api/static/*.html"]
 
 [tool.ruff]
 line-length = 100
