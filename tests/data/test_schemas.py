@@ -1,5 +1,9 @@
 import pandas as pd
-import pandera as pa
+
+try:
+    import pandera.pandas as pa
+except ImportError:
+    import pandera as pa
 import pytest
 
 pytestmark = pytest.mark.data
