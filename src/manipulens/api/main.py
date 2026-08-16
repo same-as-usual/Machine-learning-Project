@@ -49,6 +49,11 @@ class BatchScoreRequest(BaseModel):
     headlines: list[str] = Field(min_length=1, max_length=MAX_BATCH)
 
 
+class DeliveryGapRequest(BaseModel):
+    headline: str = Field(min_length=1, max_length=MAX_HEADLINE_LEN)
+    body: str = Field(min_length=1, max_length=20000)
+
+
 class FeedbackRequest(BaseModel):
     headline: str = Field(min_length=1, max_length=MAX_HEADLINE_LEN)
     model_score: float | None = None
@@ -76,6 +81,22 @@ def score_batch(req: BatchScoreRequest) -> dict:
         if len(h) > MAX_HEADLINE_LEN:
             raise HTTPException(422, detail="headline too long")
     return {"results": [score_one(h) for h in req.headlines]}
+
+
+@app.post("/delivery_gap")
+def delivery_gap(req: DeliveryGapRequest) -> dict:
+    """Does the article body deliver what the headline promises? (NLI check —
+    an entailment claim about the article, never about the world.)"""
+    from manipulens.models.delivery_gap import nli_available, score_delivery
+
+    if not nli_available():
+        raise HTTPException(
+            503, detail="NLI stack not installed; pip install 'manipulens[transformers]'"
+        )
+    result = score_delivery(req.headline, req.body)
+    if "error" in result:
+        raise HTTPException(422, detail=result["error"])
+    return result
 
 
 @app.post("/feedback")

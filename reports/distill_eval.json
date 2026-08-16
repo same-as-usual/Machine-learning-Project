@@ -1,0 +1,7 @@
+{
+  "binary_roc_auc": 0.9159420289855073,
+  "n_eval": 42.0,
+  "student_name": "sentence-transformers/all-MiniLM-L6-v2",
+  "teacher_name": "sentence-transformers/all-MiniLM-L6-v2",
+  "steps": 16
+}

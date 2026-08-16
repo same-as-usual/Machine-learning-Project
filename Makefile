@@ -32,6 +32,27 @@ data:  ## ingest -> dedup -> split
 train:  ## train + calibrate baselines, write eval report
 	$(PY) -m manipulens.models.baselines
 
+data-webis:  ## Webis Clickbait 2017 (graded intensity + article bodies)
+	$(PY) -m manipulens.data.ingest_webis
+
+train-transformer:  ## multi-task fine-tune (DeBERTa-v3-small by default; GPU recommended)
+	$(PY) -m manipulens.models.transformer
+
+train-transformer-smoke:  ## CPU-friendly smoke run (MiniLM, small subset)
+	$(PY) -m manipulens.models.transformer --smoke --model-name sentence-transformers/all-MiniLM-L6-v2
+
+distill:  ## teacher -> MiniLM student on soft labels
+	$(PY) -m manipulens.models.distill
+
+export-onnx:  ## student -> ONNX -> INT8 + parity/latency benchmark
+	$(PY) -m manipulens.models.export_onnx --model-dir models/artifacts/student
+
+label-validate:  ## LLM labels vs human gold set (needs ANTHROPIC_API_KEY)
+	$(PY) -m manipulens.labeling.llm_labeler validate-gold
+
+label:  ## LLM-label training headlines (budget-capped, cached)
+	$(PY) -m manipulens.labeling.llm_labeler label
+
 serve:
 	.venv/bin/uvicorn manipulens.api.main:app --host 0.0.0.0 --port 8000
 

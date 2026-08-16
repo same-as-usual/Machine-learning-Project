@@ -66,9 +66,31 @@ docs/decisions/  # ADRs
 reports/         # eval report, model card (generated)
 ```
 
+## Phase 3+ pipelines (implemented)
+
+```bash
+make data-webis               # Webis Clickbait 2017: graded intensity + article bodies
+make train-transformer        # multi-task fine-tune (intensity + taxonomy + binary heads)
+make train-transformer-smoke  # CPU smoke run (MiniLM)
+make distill                  # teacher -> MiniLM student on soft labels
+make export-onnx              # student -> ONNX -> INT8 (<30 MB) + parity/latency benchmark
+make label-validate           # LLM labels vs human gold set (Krippendorff's alpha gate)
+```
+
+- **Delivery gap** (`POST /delivery_gap`): zero-shot NLI cross-encoder checks whether
+  the article body entails its own headline. Verified: an overpromising headline
+  scores gap 0.999; a faithful wire headline scores delivery 0.976.
+- **LLM labeling** (`src/manipulens/labeling/llm_labeler.py`): codebook-as-cached-system-prompt,
+  structured JSON output, self-consistency voting, USD budget cap, JSONL cache, and a
+  hard validation gate — a dimension's LLM labels are usable only if agreement with the
+  human gold set clears α ≥ 0.6. `--dry-run` exercises the pipeline without an API key.
+- **Edge chain**: multi-task teacher → distilled MiniLM student → ONNX → dynamic INT8
+  (22.9 MB, ~1.5e-2 max quantization error) — the artifact that will run in-browser
+  via ONNX Runtime Web.
+
 ## Roadmap
 
-Phases 3–7 of the [project plan](docs/PLAN.md): DeBERTa-v3-small multi-task fine-tune → distillation + INT8 ONNX → delivery-gap NLI → web demo + MV3 extension with in-browser inference → neutrality & robustness audits → Hugging Face Hub release.
+Remaining from the [project plan](docs/PLAN.md): full DeBERTa-v3-small fine-tune on GPU, web demo radar view, MV3 extension with in-browser inference, neutrality & robustness audit reports, Hugging Face Hub release.
 
 ## Limitations
 
