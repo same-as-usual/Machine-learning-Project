@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "manipulens"
+version = "0.1.0"
+description = "Detects manipulation techniques in news headlines — not truth. Multi-dimensional taxonomy, calibrated scores, leakage-safe evaluation."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "James Murdza", email = "jamesmurdza@gmail.com" }]
+dependencies = [
+    "pandas>=2.0",
+    "pyarrow>=14.0",
+    "scikit-learn>=1.4",
+    "pandera>=0.18",
+    "datasketch>=1.6",
+    "lightgbm>=4.0",
+    "joblib>=1.3",
+    "requests>=2.31",
+    "pyyaml>=6.0",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+    "ruff>=0.4",
+    "mypy>=1.9",
+    "pre-commit>=3.6",
+]
+transformers = [
+    # Phase 3+: DeBERTa-v3-small multi-task fine-tune, distillation, ONNX export
+    "torch",
+    "transformers>=4.40",
+    "onnx",
+    "onnxruntime",
+    "optimum",
+]
+tracking = ["wandb", "dvc[s3]>=3.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+manipulens = ["labeling/lexicons/*.txt", "labeling/*.md", "api/static/*.html"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
+no_implicit_optional = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "behavioral: CheckList-style model behavioral tests (promotion gate)",
+    "data: data contract tests",
+]

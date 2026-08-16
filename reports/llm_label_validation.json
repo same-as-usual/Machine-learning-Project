@@ -1,0 +1,50 @@
+{
+  "n": 30,
+  "min_gold_alpha": 0.6,
+  "dimensions": {
+    "curiosity_gap": {
+      "alpha": 0.815625,
+      "exact_agreement": 0.8666666666666667,
+      "n_units": 30.0,
+      "usable": true
+    },
+    "outrage": {
+      "alpha": 0.6958762886597938,
+      "exact_agreement": 0.9666666666666667,
+      "n_units": 30.0,
+      "usable": true
+    },
+    "fear": {
+      "alpha": 0.8031145717463849,
+      "exact_agreement": 0.9,
+      "n_units": 30.0,
+      "usable": true
+    },
+    "false_certainty": {
+      "alpha": 0.6402439024390244,
+      "exact_agreement": 0.8666666666666667,
+      "n_units": 30.0,
+      "usable": true
+    },
+    "emotional_framing": {
+      "alpha": 0.9459211732355637,
+      "exact_agreement": 0.9666666666666667,
+      "n_units": 30.0,
+      "usable": true
+    },
+    "sensational_formatting": {
+      "alpha": 0.9459211732355637,
+      "exact_agreement": 0.9666666666666667,
+      "n_units": 30.0,
+      "usable": true
+    }
+  },
+  "usable_dimensions": [
+    "curiosity_gap",
+    "outrage",
+    "fear",
+    "false_certainty",
+    "emotional_framing",
+    "sensational_formatting"
+  ]
+}

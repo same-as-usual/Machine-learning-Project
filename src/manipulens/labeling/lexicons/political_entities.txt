@@ -1,0 +1,47 @@
+# Political entities and identity terms masked before the learned text
+# representation (see models/neutralize.py). Technique scores must be invariant
+# to WHO the headline is about — enforced by construction, then verified by the
+# behavioral suite. Multi-word phrases allowed; longest match wins.
+joe biden
+donald trump
+kamala harris
+barack obama
+hillary clinton
+bernie sanders
+biden
+trump
+obama
+harris
+clinton
+sanders
+pelosi
+mcconnell
+schumer
+desantis
+newsom
+democrats
+democrat
+democratic party
+republicans
+republican
+gop
+the left
+the right
+left-wing
+right-wing
+leftist
+leftists
+liberals
+liberal
+conservatives
+conservative
+progressives
+progressive
+maga
+socialists
+socialist
+libertarians
+libertarian
+labour
+tories
+tory

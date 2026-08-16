@@ -1,0 +1,53 @@
+# NOTE: This workflow lives under ci/github-workflows/ because the deployment
+# token used to push this repo lacks the `workflow` OAuth scope and GitHub
+# rejects pushes that create files under .github/workflows/.
+#
+# To activate CI, run locally (with credentials that have workflow scope):
+#   mkdir -p .github/workflows && cp ci/github-workflows/ci.yml .github/workflows/ci.yml
+#   git add .github/workflows/ci.yml && git commit -m "Enable CI" && git push
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Lint
+        run: |
+          ruff check src tests
+          ruff format --check src tests
+      - name: Unit + data-contract tests
+        run: pytest -m "not behavioral"
+
+  behavioral-gate:
+    # Model promotion gate: trains a small baseline on a synthetic sample and
+    # runs CheckList-style invariance/directional tests against it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Train on sample data
+        run: |
+          python -m manipulens.data.ingest --sample
+          python -m manipulens.data.dedup
+          python -m manipulens.data.splits
+          python -m manipulens.models.baselines
+      - name: Behavioral tests (promotion gate)
+        run: pytest -m behavioral

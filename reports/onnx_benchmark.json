@@ -1,0 +1,12 @@
+{
+  "model_dir": "/home/daytona/project/models/artifacts/student",
+  "model_name": "sentence-transformers/all-MiniLM-L6-v2",
+  "fp32_mb": 90.41,
+  "int8_mb": 22.91,
+  "fp32_max_abs_diff_vs_torch": 1.1920928955078125e-07,
+  "fp32_p50_ms": 498.37,
+  "fp32_p95_ms": 853.11,
+  "int8_max_abs_diff_vs_torch": 0.015202611684799194,
+  "int8_p50_ms": 198.41,
+  "int8_p95_ms": 400.79
+}

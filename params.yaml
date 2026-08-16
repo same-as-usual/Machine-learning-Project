@@ -1,0 +1,73 @@
+# Central pipeline parameters (read by modules and dvc.yaml)
+data:
+  raw_dir: data/raw
+  interim_dir: data/interim
+  processed_dir: data/processed
+  min_headline_chars: 12
+  max_headline_chars: 300
+
+dedup:
+  num_perm: 128          # MinHash permutations
+  lsh_threshold: 0.8     # Jaccard similarity above which two headlines are near-dupes
+  shingle_size: 3        # character shingles (robust to small edits)
+
+webis:
+  archive: clickbait17-train-170331.zip   # 148 MB, 2459 posts; use
+  # clickbait17-train-170630.zip (937 MB, 19538 posts) when disk allows
+  max_body_chars: 4000
+
+splits:
+  test_size: 0.15
+  val_size: 0.15
+  seed: 42
+
+train:
+  seed: 42
+  tfidf:
+    word_ngram_max: 2
+    char_ngram_min: 3
+    char_ngram_max: 5
+    max_features: 200000
+  lightgbm:
+    n_estimators: 400
+    learning_rate: 0.05
+    num_leaves: 63
+  calibration: isotonic   # isotonic | sigmoid
+
+transformer:
+  model_name: microsoft/deberta-v3-small
+  max_length: 64
+  batch_size: 32
+  epochs: 2
+  lr: 3.0e-5
+  warmup_frac: 0.1
+  intensity_loss_weight: 1.0
+  taxonomy_loss_weight: 0.5
+  binary_loss_weight: 0.5
+  seed: 42
+
+distill:
+  student_name: sentence-transformers/all-MiniLM-L6-v2  # 22M params, fast tokenizer
+  temperature: 2.0
+  epochs: 3
+  lr: 5.0e-5
+  batch_size: 64
+
+nli:
+  model_name: cross-encoder/nli-deberta-v3-xsmall
+  max_length: 384
+  body_window_sents: 4    # sentences per premise window
+  max_windows: 6
+
+llm_labeling:
+  model: claude-opus-4-8  # override with a cheaper tier explicitly if desired
+  n_samples: 3            # self-consistency votes per headline
+  max_headlines: 500      # hard cap per run
+  max_usd_per_run: 5.0    # hard budget cap; run aborts when estimate exceeds this
+  input_usd_per_mtok: 5.0   # claude-opus-4-8 pricing
+  output_usd_per_mtok: 25.0
+  min_gold_alpha: 0.6     # dimension ships only if LLM-vs-gold alpha >= this
+
+artifacts:
+  models_dir: models/artifacts
+  reports_dir: reports
