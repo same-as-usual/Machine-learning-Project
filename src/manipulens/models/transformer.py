@@ -56,9 +56,50 @@ def cap_torch_threads() -> None:
 # --------------------------------------------------------------------------
 
 
-def taxonomy_targets(headline: str) -> list[float]:
+LLM_LABELS_FILE = REPO_ROOT / "data" / "labels" / "taxonomy_labels.parquet"
+LLM_VALIDATION_FILE = REPO_ROOT / "reports" / "llm_label_validation.json"
+
+
+def load_llm_taxonomy(
+    labels_file: Path | None = None, validation_file: Path | None = None
+) -> tuple[dict[str, dict[str, float]], list[str]]:
+    """Validated LLM taxonomy labels, gated by the gold-set agreement report.
+
+    Returns (headline -> {dimension: target in [0,1]}, usable_dimensions).
+    Only dimensions that cleared min_gold_alpha in the validation report are
+    included — the gate is enforced HERE, at the training boundary, not just
+    reported. Labels use the codebook's 0-2 scale, mapped to 0/0.5/1 targets.
+    """
+    labels_file = labels_file or LLM_LABELS_FILE
+    validation_file = validation_file or LLM_VALIDATION_FILE
+    if not labels_file.exists() or not validation_file.exists():
+        return {}, []
+    usable = json.loads(validation_file.read_text()).get("usable_dimensions", [])
+    if not usable:
+        return {}, []
+    df = pd.read_parquet(labels_file)
+    if "out_of_scope" in df.columns:
+        df = df[~df["out_of_scope"].astype(bool)]
+    mapping = {
+        row["headline"]: {dim: float(row[dim]) / 2.0 for dim in usable} for _, row in df.iterrows()
+    }
+    return mapping, usable
+
+
+def taxonomy_targets(
+    headline: str,
+    llm_map: dict[str, dict[str, float]] | None = None,
+    usable: list[str] | None = None,
+) -> list[float]:
+    """Per-dimension targets: labeling-function weak labels, overridden by
+    validated LLM labels where available (usable dimensions only)."""
     results = score_headline(headline)
-    return [results[d].score for d in DIMENSIONS]
+    targets = [results[d].score for d in DIMENSIONS]
+    if llm_map and (llm_labels := llm_map.get(headline)):
+        for i, dim in enumerate(DIMENSIONS):
+            if usable and dim in usable and dim in llm_labels:
+                targets[i] = llm_labels[dim]
+    return targets
 
 
 def build_frame(smoke: bool = False) -> pd.DataFrame:
@@ -101,11 +142,20 @@ def build_frame(smoke: bool = False) -> pd.DataFrame:
 
 
 class HeadlineDataset(Dataset):
-    def __init__(self, df: pd.DataFrame, tokenizer, max_length: int):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        tokenizer,
+        max_length: int,
+        llm_map: dict[str, dict[str, float]] | None = None,
+        usable: list[str] | None = None,
+    ):
         self.headlines = [mask_entities(h) for h in df["headline"].tolist()]
         self.intensity = df["intensity"].to_numpy(dtype=np.float32)
         self.label = df["label"].to_numpy(dtype=np.float32)
-        self.taxonomy = np.array([taxonomy_targets(h) for h in df["headline"]], dtype=np.float32)
+        self.taxonomy = np.array(
+            [taxonomy_targets(h, llm_map, usable) for h in df["headline"]], dtype=np.float32
+        )
         self.tokenizer = tokenizer
         self.max_length = max_length
 
@@ -228,8 +278,17 @@ def train(args: argparse.Namespace) -> dict:
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     max_length = params["max_length"]
-    train_ds = HeadlineDataset(trn, tokenizer, max_length)
-    val_ds = HeadlineDataset(val, tokenizer, max_length)
+    llm_map, usable = load_llm_taxonomy()
+    if llm_map:
+        n_hit = sum(1 for h in df["headline"] if h in llm_map)
+        print(
+            f"validated LLM labels: {len(llm_map)} headlines "
+            f"({n_hit} in training frame), usable dims: {usable}"
+        )
+    else:
+        print("no validated LLM labels found; taxonomy targets = weak labels only")
+    train_ds = HeadlineDataset(trn, tokenizer, max_length, llm_map, usable)
+    val_ds = HeadlineDataset(val, tokenizer, max_length, llm_map, usable)
     batch_size = args.batch_size or params["batch_size"]
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=batch_size)
