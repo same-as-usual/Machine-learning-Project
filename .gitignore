@@ -18,6 +18,10 @@ models/artifacts/
 # DVC
 /data/.dvc-cache
 
+# Generated label caches (gold seed CSV stays tracked)
+data/labels/
+data/feedback/
+
 # Tooling
 .pytest_cache/
 .mypy_cache/
