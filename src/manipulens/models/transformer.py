@@ -208,19 +208,27 @@ class MultiTaskHeadlineModel(nn.Module):
 
 
 def multitask_loss(outputs: dict, batch: dict, weights: dict[str, float]) -> torch.Tensor:
-    """Masked losses: each task only contributes where its target exists."""
+    """Masked, numerically-safe losses: each task only contributes where its
+    target is finite, so a single corrupted/NaN target can never poison the whole
+    loss (a non-finite target previously NaN'd *every* task, corrupted the shared
+    encoder, and crashed evaluation downstream)."""
     total = torch.tensor(0.0, device=outputs["intensity"].device)
 
-    m = ~torch.isnan(batch["intensity"])
+    m = torch.isfinite(batch["intensity"])
     if m.any():
         pred = torch.sigmoid(outputs["intensity"][m])
-        total = total + weights["intensity"] * nn.functional.mse_loss(pred, batch["intensity"][m])
+        # regression target lives in the sigmoid output range [0, 1]; clip odd
+        # values so an out-of-range point cannot drag gradients.
+        target = batch["intensity"][m].clamp(0.0, 1.0)
+        total = total + weights["intensity"] * nn.functional.mse_loss(pred, target)
 
-    total = total + weights["taxonomy"] * nn.functional.binary_cross_entropy_with_logits(
-        outputs["taxonomy"], batch["taxonomy"]
-    )
+    m = torch.isfinite(batch["taxonomy"])
+    if m.any():
+        total = total + weights["taxonomy"] * nn.functional.binary_cross_entropy_with_logits(
+            outputs["taxonomy"][m], batch["taxonomy"][m].clamp(min=0.0, max=1.0)
+        )
 
-    m = ~torch.isnan(batch["label"])
+    m = torch.isfinite(batch["label"])
     if m.any():
         total = total + weights["binary"] * nn.functional.binary_cross_entropy_with_logits(
             outputs["binary"][m], batch["label"][m]
@@ -240,26 +248,37 @@ def evaluate(model, loader, device) -> dict[str, float]:
     binary_pred, binary_true = [], []
     for batch in loader:
         out = model(batch["input_ids"].to(device), batch["attention_mask"].to(device))
-        m = ~torch.isnan(batch["intensity"])
+        m = torch.isfinite(batch["intensity"])
         if m.any():
-            intensity_pred += torch.sigmoid(out["intensity"].cpu()[m]).tolist()
-            intensity_true += batch["intensity"][m].tolist()
-        m = ~torch.isnan(batch["label"])
+            pred = torch.sigmoid(out["intensity"].cpu()[m])
+            tru = batch["intensity"][m]
+            keep = torch.isfinite(pred) & torch.isfinite(tru)
+            intensity_pred += pred[keep].tolist()
+            intensity_true += tru[keep].tolist()
+        m = torch.isfinite(batch["label"])
         if m.any():
-            binary_pred += torch.sigmoid(out["binary"].cpu()[m]).tolist()
-            binary_true += batch["label"][m].tolist()
+            pred = torch.sigmoid(out["binary"].cpu()[m])
+            tru = batch["label"][m]
+            keep = torch.isfinite(pred) & torch.isfinite(tru)
+            binary_pred += pred[keep].tolist()
+            binary_true += tru[keep].tolist()
 
     report: dict[str, float] = {}
     if len(intensity_true) >= 8:
-        rho = spearmanr(intensity_true, intensity_pred).statistic
-        report["intensity_spearman"] = float(rho)
-        report["intensity_mae"] = float(
-            np.mean(np.abs(np.array(intensity_true) - np.array(intensity_pred)))
-        )
+        t = np.asarray(intensity_true)
+        p = np.asarray(intensity_pred)
+        if np.isfinite(t).all() and np.isfinite(p).all() and t.std() > 1e-9:
+            rho = spearmanr(t, p).statistic
+            if np.isfinite(rho):
+                report["intensity_spearman"] = float(rho)
+                report["intensity_mae"] = float(np.mean(np.abs(t - p)))
     if len(binary_true) >= 8 and len(set(binary_true)) > 1:
         from sklearn.metrics import roc_auc_score
 
-        report["binary_roc_auc"] = float(roc_auc_score(binary_true, binary_pred))
+        t = np.asarray(binary_true)
+        p = np.asarray(binary_pred)
+        if np.isfinite(t).all() and np.isfinite(p).all():
+            report["binary_roc_auc"] = float(roc_auc_score(t, p))
     report["n_eval"] = float(len(intensity_true) + len(binary_true))
     return report
 
@@ -334,6 +353,21 @@ def train(args: argparse.Namespace) -> dict:
             sched.step()
             optim.zero_grad()
             step += 1
+            if not torch.isfinite(loss):
+                # A non-finite loss means the run is unrecoverable (weights gone
+                # NaN/Inf). Stop instead of churning through the epoch and writing
+                # a broken model artifact. Fix the data/environment upstream.
+                print(
+                    f"step {step}/{total_steps}: loss is non-finite "
+                    f"({loss.item()}); aborting training to avoid a poisoned model"
+                )
+                return {
+                    "model_name": model_name,
+                    "steps": step,
+                    "n_train": len(trn),
+                    "n_eval": 0,
+                    "error": "non-finite loss",
+                }
             if step % 20 == 0 or step == total_steps:
                 print(f"step {step}/{total_steps} loss {loss.item():.4f}")
             if args.max_steps and step >= args.max_steps:
