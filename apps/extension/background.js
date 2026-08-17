@@ -28,17 +28,30 @@ ort.env.wasm.wasmPaths = chrome.runtime.getURL("lib/ort/");
 ort.env.wasm.numThreads = 1; // no cross-origin isolation in extension SW
 
 let localState = null; // {session, tokenizer}
+let localReady = null; // promise, so concurrent callers share one load
 
 async function getLocal() {
-  if (!localState) {
-    const [session, vocabText] = await Promise.all([
-      ort.InferenceSession.create(chrome.runtime.getURL("assets/model.int8.onnx")),
-      fetch(chrome.runtime.getURL("assets/vocab.txt")).then((r) => r.text()),
-    ]);
-    localState = { session, tokenizer: new WordPieceTokenizer(vocabText) };
+  if (!localReady) {
+    localReady = (async () => {
+      const [session, vocabText] = await Promise.all([
+        ort.InferenceSession.create(chrome.runtime.getURL("assets/model.int8.onnx")),
+        fetch(chrome.runtime.getURL("assets/vocab.txt")).then((r) => r.text()),
+      ]);
+      localState = { session, tokenizer: new WordPieceTokenizer(vocabText) };
+      return localState;
+    })();
+    localReady.catch(() => {
+      localReady = null; // allow retry after a failed load
+    });
   }
-  return localState;
+  return localReady;
 }
+
+// Warm the model as soon as the service worker spawns: fetching + compiling
+// 23 MB of wasm-executed model takes seconds, and without this the FIRST
+// page's scans could all miss while the model was still loading (the "works
+// only after a refresh" symptom).
+getLocal().catch(() => {});
 
 async function scoreLocal(headlines) {
   const { session, tokenizer } = await getLocal();
