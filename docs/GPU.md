@@ -65,6 +65,28 @@ Then download `models/artifacts/student/` (Colab file pane or
 | Behavioral gate | all pass | `pytest -m behavioral` |
 | JS/Python preprocessing parity | 10/10 probes | `tools/test_tokenizer_parity.py` |
 
+## Troubleshooting
+
+**`loss nan` from the first steps.** Observed on a Colab T4 with transformers
+5.x + DeBERTa-v3-small even with verified-clean data (the identical code and
+data are finite on CPU) — an environment-specific encoder numerics bug.
+Defenses now built in:
+
+- A **preflight** runs one forward+backward on the real device before training.
+  If the default encoder produces a non-finite loss/gradient, training
+  **automatically falls back** to `FacebookAI/roberta-base` (look for
+  `preflight: falling back to ...` in the log) — the run still completes and
+  the distill/export chain is unaffected (the student is MiniLM either way).
+- If loss ever goes non-finite mid-run, training aborts *before* the optimizer
+  step, so no poisoned artifact is written.
+- If you specifically want DeBERTa-v3 and hit the fallback, try pinning
+  `pip install "transformers==4.51.3"` (pre-refactor DeBERTa code path) or a
+  different torch build, then rerun `python -m manipulens.models.transformer`.
+
+**`FileNotFoundError: manipulens_config.json` in distill/export.** The config
+is written only after training + evaluation succeed — it means the fine-tune
+did not finish. Fix the training step first; the error message now says so.
+
 ## Tuning notes
 
 - `params.yaml → transformer.*` holds LR/batch/epochs; the loop uses linear
