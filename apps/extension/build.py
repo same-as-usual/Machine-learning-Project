@@ -69,9 +69,14 @@ def gen_entities() -> None:
     print(f"assets/political_entities.js  ({len(terms)} terms)")
 
 
+# The .bundle. build is REQUIRED: classic ort.min.js loads its wasm glue via a
+# runtime dynamic import(), which Chrome forbids in MV3 service workers.
+ORT_FILES = ("ort.bundle.min.mjs", "ort-wasm-simd-threaded.wasm", "ort-wasm-simd-threaded.mjs")
+
+
 def fetch_ort() -> None:
     ort_dir = EXT / "lib" / "ort"
-    if (ort_dir / "ort.min.js").exists():
+    if all((ort_dir / name).exists() for name in ORT_FILES):
         print("lib/ort/ already present, skipping npm fetch")
         return
     ort_dir.mkdir(parents=True, exist_ok=True)
@@ -85,10 +90,10 @@ def fetch_ort() -> None:
             capture_output=True,
         )
         dist = Path(tmp) / "node_modules" / "onnxruntime-web" / "dist"
-        for f in dist.iterdir():
-            if f.suffix in (".wasm", ".mjs") or f.name == "ort.min.js":
-                shutil.copy2(f, ort_dir / f.name)
-                print(f"lib/ort/{f.name}  ({f.stat().st_size / 1e6:.1f} MB)")
+        for name in ORT_FILES:
+            f = dist / name
+            shutil.copy2(f, ort_dir / f.name)
+            print(f"lib/ort/{f.name}  ({f.stat().st_size / 1e6:.1f} MB)")
 
 
 if __name__ == "__main__":

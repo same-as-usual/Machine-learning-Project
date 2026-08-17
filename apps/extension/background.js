@@ -6,14 +6,21 @@
  *   server           — POST /score_batch to a ManipuLens API instance.
  *
  * Mode + API URL live in chrome.storage.sync (see popup.js).
+ *
+ * This is a MODULE service worker (manifest: background.type = "module") using
+ * the ort.bundle build: the classic ort.min.js loads its wasm glue via a
+ * runtime dynamic import(), which Chrome forbids in MV3 service workers —
+ * InferenceSession.create() would throw and no headline ever got a badge.
+ * The .bundle. build inlines the glue; the .wasm itself arrives via fetch(),
+ * which is allowed.
  */
 
-importScripts(
-  "lib/ort/ort.min.js",
-  "lib/tokenizer.js",
-  "lib/mask.js",
-  "assets/political_entities.js"
-);
+import * as ort from "./lib/ort/ort.bundle.min.mjs";
+import "./lib/tokenizer.js"; // attaches WordPieceTokenizer to globalThis
+import "./lib/mask.js"; // attaches maskEntities to globalThis
+import "./assets/political_entities.js"; // sets MANIPULENS_POLITICAL_ENTITIES
+
+const { WordPieceTokenizer, maskEntities } = globalThis;
 
 const MAX_LENGTH = 64;
 
