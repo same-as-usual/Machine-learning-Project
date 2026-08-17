@@ -314,6 +314,119 @@ def evaluate(model, loader, device) -> dict[str, float]:
     return report
 
 
+# After this many consecutive non-finite batches the encoder is systemically
+# broken in this environment (not just one pathological batch) — give up on it
+# and let train() fall back to the next candidate.
+MAX_CONSECUTIVE_BAD_STEPS = 10
+
+
+def _fit_candidate(
+    name: str,
+    trn: pd.DataFrame,
+    val: pd.DataFrame,
+    args: argparse.Namespace,
+    params: dict,
+    weights: dict[str, float],
+    device,
+    llm_map: dict | None = None,
+    usable: list[str] | None = None,
+) -> tuple | None:
+    """Build tokenizer/datasets/model for one candidate encoder and train it.
+
+    Numerics defenses (a DeBERTa-v3 + transformers 5.x fine-tune on a Colab T4
+    produced NaN gradients from the first batches with verified-clean data):
+      - preflight: one forward+backward must be finite before the run starts
+      - per-step guard: a batch whose loss OR gradient norm is non-finite is
+        skipped BEFORE the optimizer step, so weights are never poisoned
+      - bail-out: MAX_CONSECUTIVE_BAD_STEPS consecutive bad batches means the
+        encoder itself is broken here -> return None so train() can fall back
+
+    Returns (model, tokenizer, val_loader, info) or None if this encoder is
+    numerically unusable in this environment.
+    """
+    max_length = params["max_length"]
+    batch_size = args.batch_size or params["batch_size"]
+    tokenizer = AutoTokenizer.from_pretrained(name)
+    train_ds = HeadlineDataset(trn, tokenizer, max_length, llm_map, usable)
+    val_ds = HeadlineDataset(val, tokenizer, max_length, llm_map, usable)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=batch_size)
+
+    model = MultiTaskHeadlineModel(name).to(device)
+    if not preflight_finite(model, next(iter(train_loader)), weights, device):
+        print(
+            f"preflight: {name} produced a non-finite loss/gradient on "
+            f"{device.type} with clean data — this encoder is numerically "
+            f"broken in this environment (torch {torch.__version__})."
+        )
+        return None
+
+    epochs = 1 if args.smoke else params["epochs"]
+    total_steps = len(train_loader) * epochs
+    if args.max_steps:
+        total_steps = min(total_steps, args.max_steps)
+    optim = torch.optim.AdamW(model.parameters(), lr=params["lr"])
+    warmup = max(1, int(total_steps * params["warmup_frac"]))
+    sched = torch.optim.lr_scheduler.LambdaLR(
+        optim,
+        lambda s: (
+            min(1.0, s / warmup) * max(0.0, 1 - max(0, s - warmup) / max(1, total_steps - warmup))
+        ),
+    )
+
+    step = skipped = consecutive_bad = 0
+    model.train()
+    for _epoch in range(epochs):
+        for batch in train_loader:
+            out = model(batch["input_ids"].to(device), batch["attention_mask"].to(device))
+            loss = multitask_loss(
+                out,
+                {
+                    k: v.to(device)
+                    for k, v in batch.items()
+                    if k not in ("input_ids", "attention_mask")
+                },
+                weights,
+            )
+            step += 1
+            bad = not bool(torch.isfinite(loss))
+            if not bad:
+                loss.backward()
+                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                bad = not bool(torch.isfinite(grad_norm))
+            if bad:
+                # Weights are still clean — we never step on non-finite
+                # gradients. Drop this batch and move on.
+                optim.zero_grad(set_to_none=True)
+                skipped += 1
+                consecutive_bad += 1
+                if consecutive_bad >= MAX_CONSECUTIVE_BAD_STEPS:
+                    print(
+                        f"{name}: {consecutive_bad} consecutive non-finite "
+                        f"batches around step {step}/{total_steps} — encoder "
+                        f"is numerically broken on {device.type}, giving up on it"
+                    )
+                    return None
+                continue
+            consecutive_bad = 0
+            optim.step()
+            sched.step()
+            optim.zero_grad()
+            if step % 20 == 0 or step == total_steps:
+                print(f"step {step}/{total_steps} loss {loss.item():.4f}")
+            if args.max_steps and step >= args.max_steps:
+                break
+        if args.max_steps and step >= args.max_steps:
+            break
+
+    if step and skipped == step:
+        print(f"{name}: every batch ({skipped}) was non-finite — no training happened")
+        return None
+    if skipped:
+        print(f"warning: skipped {skipped}/{step} batches with non-finite loss/gradients")
+    return model, tokenizer, val_loader, {"steps": step, "skipped_steps": skipped}
+
+
 def train(args: argparse.Namespace) -> dict:
     cap_torch_threads()
     params = load_params()["transformer"]
@@ -336,7 +449,6 @@ def train(args: argparse.Namespace) -> dict:
         )
     else:
         print("no validated LLM labels found; taxonomy targets = weak labels only")
-    batch_size = args.batch_size or params["batch_size"]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     weights = {
         "intensity": params["intensity_loss_weight"],
@@ -345,96 +457,31 @@ def train(args: argparse.Namespace) -> dict:
     }
 
     # An explicitly-requested model must fail loudly; the default gets one
-    # automatic fallback to a known-stable encoder if it flunks the preflight.
+    # automatic fallback to a known-stable encoder if it turns out to be
+    # numerically broken in this environment (at preflight OR mid-run).
     candidates = [model_name] if args.model_name else [model_name, FALLBACK_MODEL]
-    model = None
+    fitted = None
     for name in candidates:
-        tokenizer = AutoTokenizer.from_pretrained(name)
-        train_ds = HeadlineDataset(trn, tokenizer, max_length, llm_map, usable)
-        val_ds = HeadlineDataset(val, tokenizer, max_length, llm_map, usable)
-        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-        val_loader = DataLoader(val_ds, batch_size=batch_size)
-        candidate = MultiTaskHeadlineModel(name).to(device)
-        if preflight_finite(candidate, next(iter(train_loader)), weights, device):
-            model, model_name = candidate, name
+        if name != candidates[0]:
+            print(f"falling back to {name}")
+        fitted = _fit_candidate(name, trn, val, args, params, weights, device, llm_map, usable)
+        if fitted is not None:
+            model_name = name
             break
-        print(
-            f"preflight: {name} produced a non-finite loss/gradient on "
-            f"{device.type} with clean data — this encoder is numerically "
-            f"broken in this environment (torch {torch.__version__})."
-        )
-        del candidate
         if device.type == "cuda":
             torch.cuda.empty_cache()
-    if model is None:
+    if fitted is None:
         raise SystemExit(
-            "preflight failed for all candidate encoders; not starting a run "
-            "that would train to NaN. Try a different --model-name (e.g. "
-            f"{FALLBACK_MODEL} or distilbert-base-uncased) or different "
-            "torch/transformers versions."
+            "all candidate encoders produced non-finite numerics on this "
+            "device; not writing a poisoned model. Try a different "
+            f"--model-name (e.g. {FALLBACK_MODEL} or distilbert-base-uncased) "
+            "or different torch/transformers versions (see docs/GPU.md)."
         )
-    if model_name != candidates[0]:
-        print(f"preflight: falling back to {model_name}")
-
-    epochs = 1 if args.smoke else params["epochs"]
-    total_steps = len(train_loader) * epochs
-    if args.max_steps:
-        total_steps = min(total_steps, args.max_steps)
-    optim = torch.optim.AdamW(model.parameters(), lr=params["lr"])
-    warmup = max(1, int(total_steps * params["warmup_frac"]))
-    sched = torch.optim.lr_scheduler.LambdaLR(
-        optim,
-        lambda s: (
-            min(1.0, s / warmup) * max(0.0, 1 - max(0, s - warmup) / max(1, total_steps - warmup))
-        ),
-    )
-
-    step = 0
-    model.train()
-    for _epoch in range(epochs):
-        for batch in train_loader:
-            out = model(batch["input_ids"].to(device), batch["attention_mask"].to(device))
-            loss = multitask_loss(
-                out,
-                {
-                    k: v.to(device)
-                    for k, v in batch.items()
-                    if k not in ("input_ids", "attention_mask")
-                },
-                weights,
-            )
-            step += 1
-            if not torch.isfinite(loss):
-                # Abort BEFORE backward/step so the saved-nothing state stays
-                # clean: stepping on NaN gradients would poison every weight.
-                # Stop instead of churning through the epoch and writing a
-                # broken model artifact. Fix the data/environment upstream.
-                print(
-                    f"step {step}/{total_steps}: loss is non-finite "
-                    f"({loss.item()}); aborting training to avoid a poisoned model"
-                )
-                return {
-                    "model_name": model_name,
-                    "steps": step,
-                    "n_train": len(trn),
-                    "n_eval": 0,
-                    "error": "non-finite loss",
-                }
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optim.step()
-            sched.step()
-            optim.zero_grad()
-            if step % 20 == 0 or step == total_steps:
-                print(f"step {step}/{total_steps} loss {loss.item():.4f}")
-            if args.max_steps and step >= args.max_steps:
-                break
-        if args.max_steps and step >= args.max_steps:
-            break
+    model, tokenizer, val_loader, info = fitted
 
     report = evaluate(model, val_loader, device)
     report["model_name"] = model_name
-    report["steps"] = step
+    report.update(info)
     report["n_train"] = len(trn)
 
     out_dir = Path(artifacts_dir("models")) / "transformer"
