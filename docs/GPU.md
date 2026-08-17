@@ -72,13 +72,16 @@ Then download `models/artifacts/student/` (Colab file pane or
 data are finite on CPU) — an environment-specific encoder numerics bug.
 Defenses now built in:
 
-- A **preflight** runs one forward+backward on the real device before training.
-  If the default encoder produces a non-finite loss/gradient, training
-  **automatically falls back** to `FacebookAI/roberta-base` (look for
-  `preflight: falling back to ...` in the log) — the run still completes and
-  the distill/export chain is unaffected (the student is MiniLM either way).
-- If loss ever goes non-finite mid-run, training aborts *before* the optimizer
-  step, so no poisoned artifact is written.
+- A **preflight** runs one forward+backward on the real device before training
+  starts and rejects an encoder that is non-finite out of the gate.
+- **Per-step guard**: each batch's loss AND gradient norm are checked *before*
+  the optimizer step. A bad batch is skipped (weights never poisoned) and
+  counted as `skipped_steps` in `reports/transformer_eval.json`.
+- **Automatic fallback**: 10 consecutive bad batches (or a failed preflight)
+  means the encoder itself is broken in this environment — training abandons
+  it and restarts with `FacebookAI/roberta-base` (look for `falling back to`
+  in the log). The run completes either way; the distill/export chain is
+  unaffected (the student is MiniLM regardless of teacher).
 - If you specifically want DeBERTa-v3 and hit the fallback, try pinning
   `pip install "transformers==4.51.3"` (pre-refactor DeBERTa code path) or a
   different torch build, then rerun `python -m manipulens.models.transformer`.

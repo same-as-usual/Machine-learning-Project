@@ -3,5 +3,6 @@
   "n_eval": 42.0,
   "model_name": "sentence-transformers/all-MiniLM-L6-v2",
   "steps": 7,
+  "skipped_steps": 0,
   "n_train": 218
 }
