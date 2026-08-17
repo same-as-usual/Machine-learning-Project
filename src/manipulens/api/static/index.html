@@ -93,6 +93,18 @@
   .disclaimer { font-size: 12.5px; color: var(--text-muted); margin-top: 16px; }
   footer { font-size: 12.5px; color: var(--text-muted); text-align: center; margin-top: 8px; }
   footer a { color: var(--text-secondary); }
+  .section-label { font-size: 13px; font-weight: 600; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: .04em; margin: 24px 0 8px; }
+  .gap-form { display: flex; flex-direction: column; gap: 8px; }
+  .gap-form textarea {
+    padding: 10px 12px; border: 1px solid var(--baseline); border-radius: 8px;
+    background: var(--surface-1); color: var(--text-primary); font: inherit;
+    min-height: 110px; resize: vertical;
+  }
+  .gap-form .row { display: flex; gap: 8px; }
+  .verdict { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+  .best-window { font-size: 13px; color: var(--text-secondary); border-left: 3px solid var(--grid);
+    padding-left: 10px; margin: 10px 0 0; }
 </style>
 </head>
 <body>
@@ -125,6 +137,32 @@
       <div id="dimrows"></div>
     </div>
     <p class="disclaimer" id="disclaimer"></p>
+  </div>
+
+  <p class="section-label">Delivery gap — does the article deliver its headline?</p>
+  <div class="card">
+    <form id="gapform" class="gap-form">
+      <div class="row">
+        <input type="text" id="gap-headline" maxlength="500" required
+               placeholder="Headline…" autocomplete="off">
+      </div>
+      <textarea id="gap-body" required maxlength="20000"
+                placeholder="Paste the article text (or first few paragraphs)…"></textarea>
+      <div class="row">
+        <button id="gap-go" type="submit">Check delivery</button>
+        <button type="button" id="gap-example" style="background:var(--baseline);color:var(--text-primary)">Load example</button>
+      </div>
+    </form>
+  </div>
+  <div class="card" id="gap-result" style="display:none" aria-live="polite">
+    <p class="verdict" id="gap-verdict"></p>
+    <div class="hero-row">
+      <span class="hero" id="gap-score">–</span>
+      <span class="band">delivery score — how well the body supports the headline</span>
+    </div>
+    <div class="meter" aria-hidden="true"><div id="gap-meterfill"></div></div>
+    <p class="best-window" id="gap-window"></p>
+    <p class="disclaimer" id="gap-disclaimer"></p>
   </div>
 
   <footer>Calibrated LightGBM baseline · political entities masked by construction ·
@@ -208,6 +246,57 @@ function render(r) {
     rows.appendChild(row);
   }
 }
+
+// ---- delivery gap ----
+const VERDICT_TEXT = {
+  delivered: "✅ Delivered — the article supports its own headline",
+  partially_supported: "🟡 Partially supported — the body only loosely backs the headline",
+  not_directly_supported: "⚪ Not directly supported — the body neither clearly delivers nor contradicts the headline",
+  overpromises: "🔴 Overpromises — the article undercuts its own headline",
+};
+const gapForm = document.getElementById("gapform");
+const gapGo = document.getElementById("gap-go");
+
+document.getElementById("gap-example").addEventListener("click", () => {
+  document.getElementById("gap-headline").value =
+    "This common kitchen ingredient CURES cancer, scientists stunned";
+  document.getElementById("gap-body").value =
+    "A laboratory study published this week examined the effect of curcumin, a compound " +
+    "found in turmeric, on cultured cancer cells. Researchers observed reduced cell growth " +
+    "in vitro at high concentrations. The authors caution that these results are preliminary, " +
+    "have not been replicated in animals or humans, and that no dietary intake could reach " +
+    "the concentrations used. Further research is planned.";
+});
+
+gapForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  gapGo.disabled = true;
+  gapGo.textContent = "Scoring… (first call loads the NLI model)";
+  try {
+    const resp = await fetch("/delivery_gap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        headline: document.getElementById("gap-headline").value,
+        body: document.getElementById("gap-body").value,
+      }),
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || "delivery-gap scoring failed");
+    const r = await resp.json();
+    document.getElementById("gap-result").style.display = "block";
+    document.getElementById("gap-verdict").textContent = VERDICT_TEXT[r.verdict] || r.verdict;
+    document.getElementById("gap-score").textContent = Math.round(r.delivery_score * 100) + "%";
+    document.getElementById("gap-meterfill").style.width = (r.delivery_score * 100) + "%";
+    document.getElementById("gap-window").textContent =
+      "Best-supporting passage: “" + r.best_window + "”";
+    document.getElementById("gap-disclaimer").textContent = r.disclaimer;
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    gapGo.disabled = false;
+    gapGo.textContent = "Check delivery";
+  }
+});
 </script>
 </body>
 </html>

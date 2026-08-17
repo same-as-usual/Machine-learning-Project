@@ -23,7 +23,8 @@ data/labels/
 data/feedback/
 
 # Extension build outputs (regenerate with apps/extension/build.py)
-apps/extension/assets/
+apps/extension/assets/*
+!apps/extension/assets/icons/
 apps/extension/lib/ort/
 
 # Tooling

@@ -19,7 +19,15 @@ Usage:
   python -m manipulens.labeling.llm_labeler label --limit 200
   python -m manipulens.labeling.llm_labeler label --dry-run  # no API, LF-simulated
 
-Requires ANTHROPIC_API_KEY (or `ant auth login` profile) unless --dry-run.
+Providers (--provider, both subcommands):
+  anthropic (default)  ANTHROPIC_API_KEY
+  gemini               GEMINI_API_KEY   — Google AI Studio, generous FREE tier
+  groq                 GROQ_API_KEY     — free tier, Llama 3.3 70B
+  openrouter           OPENROUTER_API_KEY — has :free-suffixed models
+  ollama               no key — local models, fully offline
+  Any other OpenAI-compatible endpoint: --base-url/--model/--api-key-env.
+The validation gate treats every provider identically: labels are usable only
+if per-dimension agreement with the human gold set clears min_gold_alpha.
 """
 
 from __future__ import annotations
@@ -121,6 +129,84 @@ def _label_once_api(client, model: str, system: list[dict], headline: str) -> tu
     return labels, usd
 
 
+# OpenAI-compatible providers with free tiers (or fully local). base_url is the
+# OpenAI-compatible root; key_env names the env var holding the API key.
+OPENAI_COMPAT_PRESETS = {
+    "gemini": {
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "key_env": "GEMINI_API_KEY",
+        "model": "gemini-2.5-flash",
+    },
+    "groq": {
+        "base_url": "https://api.groq.com/openai/v1",
+        "key_env": "GROQ_API_KEY",
+        "model": "llama-3.3-70b-versatile",
+    },
+    "openrouter": {
+        "base_url": "https://openrouter.ai/api/v1",
+        "key_env": "OPENROUTER_API_KEY",
+        "model": "meta-llama/llama-3.3-70b-instruct:free",
+    },
+    "ollama": {
+        "base_url": "http://localhost:11434/v1",
+        "key_env": None,  # local — no key
+        "model": "llama3.1:8b",
+    },
+}
+
+
+def coerce_labels(raw: dict) -> dict:
+    """Free/open models don't all enforce a JSON schema server-side; coerce a
+    best-effort response into the codebook contract (ints clamped to 0..2,
+    missing dimension -> 0/conservative, out_of_scope -> bool)."""
+    out = {}
+    for dim in DIMENSIONS:
+        try:
+            out[dim] = max(0, min(2, int(round(float(raw.get(dim, 0))))))
+        except (TypeError, ValueError):
+            out[dim] = 0
+    out["out_of_scope"] = bool(raw.get("out_of_scope", False))
+    return out
+
+
+def _label_once_openai_compat(
+    base_url: str, api_key: str | None, model: str, system_text: str, headline: str
+) -> tuple[dict, float]:
+    """One labeling call against any OpenAI-compatible /chat/completions
+    endpoint (Gemini AI Studio, Groq, OpenRouter, Ollama, ...). Cost returns
+    0.0 — these are free-tier/local paths; the headline cap still applies."""
+    import requests
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    resp = requests.post(
+        f"{base_url.rstrip('/')}/chat/completions",
+        headers=headers,
+        json={
+            "model": model,
+            "temperature": 0.2,
+            "max_tokens": 256,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": system_text},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Annotate this headline:\n\n{headline}\n\n"
+                        "Respond with ONLY a JSON object matching this schema "
+                        f"(no prose): {json.dumps(LABEL_SCHEMA)}"
+                    ),
+                },
+            ],
+        },
+        timeout=120,
+    )
+    resp.raise_for_status()
+    text = resp.json()["choices"][0]["message"]["content"]
+    return coerce_labels(json.loads(text)), 0.0
+
+
 def _label_once_dry(headline: str) -> tuple[dict, float]:
     """Dry-run: simulate labels from labeling functions (0/0.6/1.0 -> 0/1/2)."""
     results = score_headline(headline)
@@ -131,13 +217,46 @@ def _label_once_dry(headline: str) -> tuple[dict, float]:
     return labels, 0.0
 
 
+def resolve_provider(args: argparse.Namespace) -> dict:
+    """Turn CLI flags into a provider spec:
+    {"kind": "anthropic"} or {"kind": "openai", base_url, api_key, model}."""
+    import os
+
+    if getattr(args, "base_url", None):
+        if not args.model:
+            sys.exit("--base-url requires --model")
+        key = os.environ.get(args.api_key_env) if args.api_key_env else None
+        return {"kind": "openai", "base_url": args.base_url, "api_key": key, "model": args.model}
+    name = getattr(args, "provider", "anthropic")
+    if name == "anthropic":
+        return {"kind": "anthropic"}
+    preset = OPENAI_COMPAT_PRESETS[name]
+    key = os.environ.get(preset["key_env"]) if preset["key_env"] else None
+    if preset["key_env"] and not key:
+        sys.exit(
+            f"--provider {name} needs the {preset['key_env']} env var. "
+            "Free keys: gemini -> aistudio.google.com, groq -> console.groq.com, "
+            "openrouter -> openrouter.ai (see README, 'LLM labeling without a paid key')."
+        )
+    return {
+        "kind": "openai",
+        "base_url": preset["base_url"],
+        "api_key": key,
+        "model": args.model or preset["model"],
+    }
+
+
 def label_headlines(
-    headlines: list[str], dry_run: bool = False, limit: int | None = None
+    headlines: list[str],
+    dry_run: bool = False,
+    limit: int | None = None,
+    provider: dict | None = None,
 ) -> pd.DataFrame:
     """Label with self-consistency + caching + budget caps. Returns a DataFrame
     with per-dimension median scores in {0,1,2}."""
+    provider = provider or {"kind": "anthropic"}
     params = load_params()["llm_labeling"]
-    model = params["model"]
+    model = params["model"] if provider["kind"] == "anthropic" else provider["model"]
     n_samples = params["n_samples"]
     max_headlines = min(limit or params["max_headlines"], params["max_headlines"])
     budget = params["max_usd_per_run"]
@@ -145,11 +264,15 @@ def label_headlines(
     cache = _load_cache()
     client = None
     system = None
+    system_text = None
     if not dry_run:
-        import anthropic
+        if provider["kind"] == "anthropic":
+            import anthropic
 
-        client = anthropic.Anthropic()
-        system = build_system()
+            client = anthropic.Anthropic()
+            system = build_system()
+        else:
+            system_text = build_system()[0]["text"]
 
     spent = 0.0
     rows = []
@@ -166,8 +289,12 @@ def label_headlines(
         for _ in range(n_samples if not dry_run else 1):
             if dry_run:
                 labels, usd = _label_once_dry(headline)
-            else:
+            elif provider["kind"] == "anthropic":
                 labels, usd = _label_once_api(client, model, system, headline)
+            else:
+                labels, usd = _label_once_openai_compat(
+                    provider["base_url"], provider["api_key"], model, system_text, headline
+                )
             samples.append(labels)
             spent += usd
 
@@ -188,12 +315,12 @@ def label_headlines(
 # ---------------------------------------------------------------------------
 
 
-def validate_against_gold(dry_run: bool = False) -> dict:
+def validate_against_gold(dry_run: bool = False, provider: dict | None = None) -> dict:
     """Label the gold set with the LLM and compute per-dimension agreement.
     Dimensions with alpha < min_gold_alpha are flagged as NOT usable."""
     params = load_params()["llm_labeling"]
     gold = pd.read_csv(GOLD_FILE)
-    llm = label_headlines(gold["headline"].tolist(), dry_run=dry_run)
+    llm = label_headlines(gold["headline"].tolist(), dry_run=dry_run, provider=provider)
     merged = gold.merge(llm, on="headline", suffixes=("_gold", "_llm"))
 
     report: dict = {"n": len(merged), "min_gold_alpha": params["min_gold_alpha"], "dimensions": {}}
@@ -213,21 +340,32 @@ def validate_against_gold(dry_run: bool = False) -> dict:
 
 
 def main(argv: list[str] | None = None) -> None:
+    provider_flags = argparse.ArgumentParser(add_help=False)
+    provider_flags.add_argument(
+        "--provider",
+        choices=["anthropic", *OPENAI_COMPAT_PRESETS],
+        default="anthropic",
+        help="anthropic (paid) or a free-tier/local OpenAI-compatible provider",
+    )
+    provider_flags.add_argument("--model", default=None, help="override the preset model")
+    provider_flags.add_argument("--base-url", default=None, help="custom OpenAI-compatible root")
+    provider_flags.add_argument("--api-key-env", default=None, help="env var name for --base-url")
+    provider_flags.add_argument("--dry-run", action="store_true")
+
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
-    p_label = sub.add_parser("label", help="label training headlines")
+    p_label = sub.add_parser("label", parents=[provider_flags], help="label training headlines")
     p_label.add_argument("--limit", type=int, default=None)
-    p_label.add_argument("--dry-run", action="store_true")
-    p_val = sub.add_parser("validate-gold", help="LLM vs human gold agreement")
-    p_val.add_argument("--dry-run", action="store_true")
+    sub.add_parser("validate-gold", parents=[provider_flags], help="LLM vs human gold agreement")
     args = parser.parse_args(argv)
 
+    provider = None if args.dry_run else resolve_provider(args)
     if args.cmd == "validate-gold":
-        validate_against_gold(dry_run=args.dry_run)
+        validate_against_gold(dry_run=args.dry_run, provider=provider)
     else:
         train_path = data_dir("processed") / "train.parquet"
         headlines = pd.read_parquet(train_path)["headline"].tolist()
-        df = label_headlines(headlines, dry_run=args.dry_run, limit=args.limit)
+        df = label_headlines(headlines, dry_run=args.dry_run, limit=args.limit, provider=provider)
         out = Path(REPO_ROOT / "data" / "labels" / "taxonomy_labels.parquet")
         out.parent.mkdir(parents=True, exist_ok=True)
         df.to_parquet(out, index=False)
