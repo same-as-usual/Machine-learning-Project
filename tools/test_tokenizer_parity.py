@@ -9,6 +9,7 @@ Exits non-zero on any mismatch.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -55,15 +56,23 @@ def main() -> int:
 
     from manipulens.models.neutralize import mask_entities
 
-    js = json.loads(
-        subprocess.run(
-            ["node", "-e", NODE_SCRIPT, str(EXT), str(MAX_LENGTH)],
+    node = shutil.which("node")
+    if node is None:
+        print("node not found on PATH — install Node.js (https://nodejs.org) and rerun")
+        return 1
+    try:
+        proc = subprocess.run(
+            [node, "-e", NODE_SCRIPT, str(EXT), str(MAX_LENGTH)],
             input=json.dumps(PROBES),
             capture_output=True,
-            text=True,
+            encoding="utf-8",  # not the platform default (cp1252 on Windows)
             check=True,
-        ).stdout
-    )
+        )
+    except subprocess.CalledProcessError as e:
+        print("node script failed — did you run apps/extension/build.py first?\n")
+        print(e.stderr)
+        return 1
+    js = json.loads(proc.stdout)
 
     tokenizer = AutoTokenizer.from_pretrained(REPO / "models" / "artifacts" / "student")
     failures = 0
