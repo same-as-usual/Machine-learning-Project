@@ -39,6 +39,12 @@ from manipulens.models.neutralize import mask_entities
 
 TASKS = ("intensity", "taxonomy", "binary")
 
+# Known-stable encoder used automatically when the default model fails the
+# numerics preflight on this device (e.g. DeBERTa-v3 under transformers 5.x
+# produced NaN loss from step 1 on a Colab T4 with verified-clean data, while
+# the identical code and data were finite on CPU).
+FALLBACK_MODEL = "FacebookAI/roberta-base"
+
 
 def cap_torch_threads() -> None:
     """CPU thread oversubscription makes torch ~25x slower on shared/throttled
@@ -208,19 +214,27 @@ class MultiTaskHeadlineModel(nn.Module):
 
 
 def multitask_loss(outputs: dict, batch: dict, weights: dict[str, float]) -> torch.Tensor:
-    """Masked losses: each task only contributes where its target exists."""
+    """Masked, numerically-safe losses: each task only contributes where its
+    target is finite, so a single corrupted/NaN target can never poison the whole
+    loss (a non-finite target previously NaN'd *every* task, corrupted the shared
+    encoder, and crashed evaluation downstream)."""
     total = torch.tensor(0.0, device=outputs["intensity"].device)
 
-    m = ~torch.isnan(batch["intensity"])
+    m = torch.isfinite(batch["intensity"])
     if m.any():
         pred = torch.sigmoid(outputs["intensity"][m])
-        total = total + weights["intensity"] * nn.functional.mse_loss(pred, batch["intensity"][m])
+        # regression target lives in the sigmoid output range [0, 1]; clip odd
+        # values so an out-of-range point cannot drag gradients.
+        target = batch["intensity"][m].clamp(0.0, 1.0)
+        total = total + weights["intensity"] * nn.functional.mse_loss(pred, target)
 
-    total = total + weights["taxonomy"] * nn.functional.binary_cross_entropy_with_logits(
-        outputs["taxonomy"], batch["taxonomy"]
-    )
+    m = torch.isfinite(batch["taxonomy"])
+    if m.any():
+        total = total + weights["taxonomy"] * nn.functional.binary_cross_entropy_with_logits(
+            outputs["taxonomy"][m], batch["taxonomy"][m].clamp(min=0.0, max=1.0)
+        )
 
-    m = ~torch.isnan(batch["label"])
+    m = torch.isfinite(batch["label"])
     if m.any():
         total = total + weights["binary"] * nn.functional.binary_cross_entropy_with_logits(
             outputs["binary"][m], batch["label"][m]
@@ -233,6 +247,31 @@ def multitask_loss(outputs: dict, batch: dict, weights: dict[str, float]) -> tor
 # --------------------------------------------------------------------------
 
 
+def preflight_finite(model, batch: dict, weights: dict[str, float], device) -> bool:
+    """One forward+backward on a real batch, checking that the loss AND all
+    gradients are finite on the actual training device, BEFORE committing to a
+    long run. Catches environment-specific numerics bugs (a NaN-ing encoder on
+    a particular GPU/library combination) at step 0 instead of after a wasted
+    multi-hour run. Leaves model weights untouched (no optimizer step)."""
+    model.train()
+    out = model(batch["input_ids"].to(device), batch["attention_mask"].to(device))
+    loss = multitask_loss(
+        out,
+        {k: v.to(device) for k, v in batch.items() if k not in ("input_ids", "attention_mask")},
+        weights,
+    )
+    ok = bool(torch.isfinite(loss))
+    if ok:
+        loss.backward()
+        ok = all(
+            bool(torch.isfinite(p.grad).all())
+            for p in model.parameters()
+            if p.grad is not None
+        )
+    model.zero_grad(set_to_none=True)
+    return ok
+
+
 @torch.no_grad()
 def evaluate(model, loader, device) -> dict[str, float]:
     model.eval()
@@ -240,26 +279,37 @@ def evaluate(model, loader, device) -> dict[str, float]:
     binary_pred, binary_true = [], []
     for batch in loader:
         out = model(batch["input_ids"].to(device), batch["attention_mask"].to(device))
-        m = ~torch.isnan(batch["intensity"])
+        m = torch.isfinite(batch["intensity"])
         if m.any():
-            intensity_pred += torch.sigmoid(out["intensity"].cpu()[m]).tolist()
-            intensity_true += batch["intensity"][m].tolist()
-        m = ~torch.isnan(batch["label"])
+            pred = torch.sigmoid(out["intensity"].cpu()[m])
+            tru = batch["intensity"][m]
+            keep = torch.isfinite(pred) & torch.isfinite(tru)
+            intensity_pred += pred[keep].tolist()
+            intensity_true += tru[keep].tolist()
+        m = torch.isfinite(batch["label"])
         if m.any():
-            binary_pred += torch.sigmoid(out["binary"].cpu()[m]).tolist()
-            binary_true += batch["label"][m].tolist()
+            pred = torch.sigmoid(out["binary"].cpu()[m])
+            tru = batch["label"][m]
+            keep = torch.isfinite(pred) & torch.isfinite(tru)
+            binary_pred += pred[keep].tolist()
+            binary_true += tru[keep].tolist()
 
     report: dict[str, float] = {}
     if len(intensity_true) >= 8:
-        rho = spearmanr(intensity_true, intensity_pred).statistic
-        report["intensity_spearman"] = float(rho)
-        report["intensity_mae"] = float(
-            np.mean(np.abs(np.array(intensity_true) - np.array(intensity_pred)))
-        )
+        t = np.asarray(intensity_true)
+        p = np.asarray(intensity_pred)
+        if np.isfinite(t).all() and np.isfinite(p).all() and t.std() > 1e-9:
+            rho = spearmanr(t, p).statistic
+            if np.isfinite(rho):
+                report["intensity_spearman"] = float(rho)
+                report["intensity_mae"] = float(np.mean(np.abs(t - p)))
     if len(binary_true) >= 8 and len(set(binary_true)) > 1:
         from sklearn.metrics import roc_auc_score
 
-        report["binary_roc_auc"] = float(roc_auc_score(binary_true, binary_pred))
+        t = np.asarray(binary_true)
+        p = np.asarray(binary_pred)
+        if np.isfinite(t).all() and np.isfinite(p).all():
+            report["binary_roc_auc"] = float(roc_auc_score(t, p))
     report["n_eval"] = float(len(intensity_true) + len(binary_true))
     return report
 
@@ -276,7 +326,6 @@ def train(args: argparse.Namespace) -> dict:
     trn = df.drop(val.index).reset_index(drop=True)
     val = val.reset_index(drop=True)
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
     max_length = params["max_length"]
     llm_map, usable = load_llm_taxonomy()
     if llm_map:
@@ -287,19 +336,45 @@ def train(args: argparse.Namespace) -> dict:
         )
     else:
         print("no validated LLM labels found; taxonomy targets = weak labels only")
-    train_ds = HeadlineDataset(trn, tokenizer, max_length, llm_map, usable)
-    val_ds = HeadlineDataset(val, tokenizer, max_length, llm_map, usable)
     batch_size = args.batch_size or params["batch_size"]
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=batch_size)
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = MultiTaskHeadlineModel(model_name).to(device)
     weights = {
         "intensity": params["intensity_loss_weight"],
         "taxonomy": params["taxonomy_loss_weight"],
         "binary": params["binary_loss_weight"],
     }
+
+    # An explicitly-requested model must fail loudly; the default gets one
+    # automatic fallback to a known-stable encoder if it flunks the preflight.
+    candidates = [model_name] if args.model_name else [model_name, FALLBACK_MODEL]
+    model = None
+    for name in candidates:
+        tokenizer = AutoTokenizer.from_pretrained(name)
+        train_ds = HeadlineDataset(trn, tokenizer, max_length, llm_map, usable)
+        val_ds = HeadlineDataset(val, tokenizer, max_length, llm_map, usable)
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_ds, batch_size=batch_size)
+        candidate = MultiTaskHeadlineModel(name).to(device)
+        if preflight_finite(candidate, next(iter(train_loader)), weights, device):
+            model, model_name = candidate, name
+            break
+        print(
+            f"preflight: {name} produced a non-finite loss/gradient on "
+            f"{device.type} with clean data — this encoder is numerically "
+            f"broken in this environment (torch {torch.__version__})."
+        )
+        del candidate
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+    if model is None:
+        raise SystemExit(
+            "preflight failed for all candidate encoders; not starting a run "
+            "that would train to NaN. Try a different --model-name (e.g. "
+            f"{FALLBACK_MODEL} or distilbert-base-uncased) or different "
+            "torch/transformers versions."
+        )
+    if model_name != candidates[0]:
+        print(f"preflight: falling back to {model_name}")
 
     epochs = 1 if args.smoke else params["epochs"]
     total_steps = len(train_loader) * epochs
@@ -328,12 +403,28 @@ def train(args: argparse.Namespace) -> dict:
                 },
                 weights,
             )
+            step += 1
+            if not torch.isfinite(loss):
+                # Abort BEFORE backward/step so the saved-nothing state stays
+                # clean: stepping on NaN gradients would poison every weight.
+                # Stop instead of churning through the epoch and writing a
+                # broken model artifact. Fix the data/environment upstream.
+                print(
+                    f"step {step}/{total_steps}: loss is non-finite "
+                    f"({loss.item()}); aborting training to avoid a poisoned model"
+                )
+                return {
+                    "model_name": model_name,
+                    "steps": step,
+                    "n_train": len(trn),
+                    "n_eval": 0,
+                    "error": "non-finite loss",
+                }
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optim.step()
             sched.step()
             optim.zero_grad()
-            step += 1
             if step % 20 == 0 or step == total_steps:
                 print(f"step {step}/{total_steps} loss {loss.item():.4f}")
             if args.max_steps and step >= args.max_steps:
@@ -363,7 +454,15 @@ def train(args: argparse.Namespace) -> dict:
 
 def load_trained(out_dir: Path | None = None) -> tuple[MultiTaskHeadlineModel, AutoTokenizer, dict]:
     out_dir = out_dir or Path(artifacts_dir("models")) / "transformer"
-    cfg = json.loads((out_dir / "manipulens_config.json").read_text())
+    cfg_path = out_dir / "manipulens_config.json"
+    if not cfg_path.exists():
+        raise SystemExit(
+            f"no trained model at {out_dir} (missing {cfg_path.name}). "
+            "This file is written only after a training run finishes AND its "
+            "evaluation succeeds — run `python -m manipulens.models.transformer` "
+            "first and check its output for errors (see docs/GPU.md)."
+        )
+    cfg = json.loads(cfg_path.read_text())
     tokenizer = AutoTokenizer.from_pretrained(out_dir)
     model = MultiTaskHeadlineModel(cfg["model_name"])
     model.load_state_dict(torch.load(out_dir / "model.pt", map_location="cpu"))

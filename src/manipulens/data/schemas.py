@@ -6,8 +6,12 @@ pipeline stage. Breaking it is a build failure, not a silent drift.
 
 from __future__ import annotations
 
-import pandera as pa
-from pandera import Check, Column
+try:  # pandera >= 0.20 prefers the pandas-specific namespace
+    import pandera.pandas as pa
+    from pandera.pandas import Check, Column
+except ImportError:  # older pandera
+    import pandera as pa
+    from pandera import Check, Column
 
 # Stage 1: raw ingested headlines
 RawHeadlineSchema = pa.DataFrameSchema(

@@ -1,5 +1,5 @@
 {
-  "binary_roc_auc": 0.8289855072463768,
+  "binary_roc_auc": 0.8782608695652174,
   "n_eval": 42.0,
   "model_name": "sentence-transformers/all-MiniLM-L6-v2",
   "steps": 7,
