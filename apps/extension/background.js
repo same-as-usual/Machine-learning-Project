@@ -68,8 +68,18 @@ async function scoreLocal(headlines) {
       ),
     };
     const out = await session.run(feeds);
-    // model outputs are already sigmoid()ed (see OnnxWrapper in export_onnx.py)
-    results.push({ manipulation_score: out.binary.data[0], intensity_score: out.intensity.data[0] });
+    // model outputs are already sigmoid()ed (see OnnxWrapper in export_onnx.py).
+    // Blend the two heads: the binary head saturates toward 0/1 (trained on a
+    // binary corpus), while the intensity head is graded (trained on Webis
+    // crowd-judged truthMean in [0,1]) — averaging gives smoother, better-
+    // separated scores on real-world pages than the binary head alone.
+    const binary = out.binary.data[0];
+    const intensity = out.intensity.data[0];
+    results.push({
+      manipulation_score: 0.5 * binary + 0.5 * intensity,
+      binary_score: binary,
+      intensity_score: intensity,
+    });
   }
   return results;
 }

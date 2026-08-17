@@ -86,16 +86,11 @@ def score_delivery(headline: str, body: str) -> dict:
     entail = probs[:, entail_idx]
     best = int(entail.argmax())
     delivery = float(entail[best])
+    contra = float(probs[:, contra_idx].max()) if contra_idx is not None else 0.0
     result = {
         "delivery_score": round(delivery, 3),
         "gap_score": round(1 - delivery, 3),
-        "verdict": (
-            "delivered"
-            if delivery >= 0.6
-            else "partially_supported"
-            if delivery >= 0.3
-            else "overpromises"
-        ),
+        "verdict": _verdict(delivery, contra),
         "best_window": windows[best][:280],
         "n_windows": len(windows),
         "disclaimer": (
@@ -104,5 +99,23 @@ def score_delivery(headline: str, body: str) -> dict:
         ),
     }
     if contra_idx is not None:
-        result["max_contradiction"] = round(float(probs[:, contra_idx].max()), 3)
+        result["max_contradiction"] = round(contra, 3)
     return result
+
+
+def _verdict(delivery: float, contradiction: float) -> str:
+    """Combine both NLI channels. Entailment alone is too strict a bar:
+    a faithful-but-paraphrased headline often scores near-zero entailment while
+    ALSO scoring near-zero contradiction (the model is just 'neutral'). The
+    contradiction channel is what actually separates an overpromising headline
+    (body undercuts its own claim -> contradiction spikes) from a merely
+    abstractive one. Measured on the curcumin probe pair: overpromising
+    headline contra=0.65, faithful paraphrase contra=0.002 — same body.
+    """
+    if delivery >= 0.6:
+        return "delivered"  # body directly entails the headline (wire-style)
+    if contradiction >= 0.5 or (delivery < 0.3 and contradiction >= 0.15):
+        return "overpromises"  # body actively undercuts the headline's promise
+    if delivery >= 0.3:
+        return "partially_supported"
+    return "not_directly_supported"  # neutral: neither delivered nor contradicted
